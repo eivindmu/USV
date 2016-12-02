@@ -1,0 +1,4 @@
+/dist/
+/nbproject/private/
+/build/classes/application/*.class
+/build/classes/application/*.form
