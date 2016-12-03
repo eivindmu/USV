@@ -51,13 +51,13 @@ public class Client extends Thread {
     @Override
     public void run() {
         while (true) {
-            System.out.println("GUI Command: " + 
-                    guiCommand + " in FIRST While-loop in Reader");
+            /*System.out.println("GUI Command: " + 
+                    guiCommand + " in FIRST While-loop in Reader");*/
             // Bruker trykker connect
             if (guiCommand == 3) { 
                 try {
-                    // Opprett ny socket
-                    Socket clientSocket = new Socket("192.168.0.101", 2345);
+                    // Opprett ny socket 192.168.0.101
+                    Socket clientSocket = new Socket("10.0.0.216", 2345);
 
                     BufferedReader inFromServer;
                     PrintStream pstream = new PrintStream(clientSocket.

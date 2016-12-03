@@ -1,14 +1,48 @@
 package application;
 
+import com.esri.core.geometry.CoordinateConversion;
+import com.esri.core.gps.GPSException;
+import com.esri.core.gps.IGPSWatcher;
+import com.esri.core.map.Graphic;
+import com.esri.core.symbol.SimpleMarkerSymbol;
+import com.esri.core.symbol.Symbol;
+import com.esri.core.symbol.TextSymbol;
+import com.esri.map.GPSLayer;
+import com.esri.map.GraphicsLayer;
+import com.esri.map.JMap;
+import com.esri.map.LayerList;
+import com.esri.map.MapOptions;
+import com.esri.map.MapOverlay;
+import com.esri.toolkit.overlays.DrawingCompleteEvent;
+import com.esri.toolkit.overlays.DrawingCompleteListener;
+import com.esri.toolkit.overlays.DrawingOverlay;
+import com.esri.toolkit.overlays.NavigatorOverlay;
 import java.awt.BorderLayout;
+import java.awt.Color;
+import java.awt.event.ActionEvent;
+import java.awt.event.ActionListener;
+import java.awt.event.MouseEvent;
+import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.io.PrintWriter;
 import java.math.RoundingMode;
 import java.text.DecimalFormat;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.List;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.regex.Pattern;
 import java.util.Timer;
 import javax.swing.BorderFactory;
+import javax.swing.JComponent;
+import javax.swing.JFrame;
+import javax.swing.JToggleButton;
 import javax.swing.plaf.basic.BasicArrowButton;
+import net.sf.marineapi.nmea.util.Time;
 import org.jfree.chart.ChartPanel;
 
 /**
@@ -29,6 +63,31 @@ public class GUI extends javax.swing.JFrame implements Runnable {
     private TrendPlot surgePlot;
     private TrendPlot yawPlot;
     private int guiCommand;
+    
+    // Fields for travel mode frame
+    private JFrame mapFrame;
+    private static final String FSP = System.getProperty("file.separator");
+    private SimpleDateFormat sdf;
+    private Date d;
+    private String date;
+    private JMap map;
+    private GraphicsLayer graphicsLayer;
+    private int numberOfWaypoints = 0;
+    private DrawingOverlay drawingOverlay;
+    private HashMap<String, List<Double>> waypointCoordinates;
+    private ArrayList<String> NMEASentences;
+    private boolean canSetWaypoints = false;
+    private MouseClickedOverlay mco;
+    private Symbol waypoint;
+    private GPSLayer gpsLayer;
+    private IGPSWatcher gpsWatcher;
+    private LayerList layers;
+    private final int northCoordinate = 0;
+    private final int eastCoordinate = 1;
+    private PrintWriter fileWriter;
+    private File route;
+    private NMEASentenceGenerator sentenceGenerator;
+    private boolean mapIsInitialised = false;
 
     /**
      * Creates new form GUI
@@ -49,6 +108,10 @@ public class GUI extends javax.swing.JFrame implements Runnable {
         frame.dataUpdated(new float[]{0f, 0f, 0f, 0f});
         this.setVisible(true);
         headingRef = 0f;
+        
+        mapFrame = new JFrame();
+        mapFrame.setSize(jPanel1.getWidth() + coordinateSystemFrame.getWidth(), jPanel1.getHeight());
+        mapFrame.add(travelModePanel);
     }
 
     // Oppdater navigasjonsdata
@@ -144,6 +207,147 @@ public class GUI extends javax.swing.JFrame implements Runnable {
         headingReferenceTextField.setText("Heading Ref (deg): " 
                 + df2.format((double) headingRef));
     }
+    
+    // Travel mode
+    private void initialiseTravelModeFrame()
+    {
+        try {
+            waypointCoordinates = new HashMap<>();
+            NMEASentences = new ArrayList<>();
+            mco = new MouseClickedOverlay();
+            waypoint = new SimpleMarkerSymbol(Color.RED, 15, SimpleMarkerSymbol.Style.CIRCLE);
+            sentenceGenerator = new NMEASentenceGenerator();
+            
+            sdf = new SimpleDateFormat("HHmmss-ddMMyyyy");
+            
+            this.addMapToUI();
+            
+        } catch (Exception ex) {
+            Logger.getLogger(GUI.class.getName()).log(Level.SEVERE, null, ex);
+        }
+    }
+    
+    private JComponent addMapToUI() throws Exception
+    {
+        MapPanel.setLayout(new BorderLayout());
+        
+        this.createMap();
+        
+        MapPanel.add(map, BorderLayout.CENTER);
+        
+        return MapPanel;
+    }
+    
+    private void createMap()
+    {
+        MapOptions mapOptions = new MapOptions(MapOptions.MapType.TOPO, 62.4698, 6.2365, 14);
+        map = new JMap(mapOptions);
+        map.setShowingEsriLogo(false);
+        
+        NavigatorOverlay navigator = new NavigatorOverlay();
+        map.addMapOverlay(navigator);
+        
+        graphicsLayer = new GraphicsLayer();
+        
+        layers = map.getLayers();
+        layers.add(graphicsLayer);
+        
+        drawingOverlay = new DrawingOverlay();
+        map.addMapOverlay(drawingOverlay);
+        drawingOverlay.setActive(true);
+        drawingOverlay.addDrawingCompleteListener(new DrawingCompleteListener()
+        {
+            @Override
+            public void drawingCompleted(DrawingCompleteEvent arg0) 
+            {
+                Graphic graphic = (Graphic) drawingOverlay.getAndClearFeature();
+                graphicsLayer.addGraphic(graphic);
+                
+                if (graphic.getAttributeValue("type").equals("Waypoints")) 
+                {
+                    graphicsLayer.addGraphic(new Graphic(graphic.getGeometry(), new TextSymbol(10, String.valueOf(numberOfWaypoints), Color.WHITE), 1));
+                    
+                    createNMEASentences();
+                }
+            }
+        });
+    }
+    
+    /**
+     * Creates NMEA sentences and adds them to the ArrayList of sentences
+     * Creates two types of sentences: GPGGA and GPRMC
+     */
+    private void createNMEASentences()
+    {
+        Date date = new Date(System.currentTimeMillis());
+        Time time = new Time();
+        time.setTime(date);
+
+        String gga;
+        String rmc;
+
+        gga = sentenceGenerator.generateGPGGASentence(waypointCoordinates.get("Waypoint " + numberOfWaypoints).get(northCoordinate),
+                waypointCoordinates.get("Waypoint " + numberOfWaypoints).get(eastCoordinate), time);
+        rmc = sentenceGenerator.generateGPRMCSentence(waypointCoordinates.get("Waypoint " + numberOfWaypoints).get(northCoordinate),
+                waypointCoordinates.get("Waypoint " + numberOfWaypoints).get(eastCoordinate), time);
+
+        NMEASentences.add(gga);
+        NMEASentences.add(rmc);
+    }
+    
+    private void startGPS()
+    {
+        /*try {
+            File path = new File("logfiles" + FSP + date + ".txt");
+            if(path.exists())
+            {
+                gpsWatcher = new FileGPSWatcher("logfiles" + FSP + date + ".txt", 1000, false);
+                gpsWatcher.setTimeout(20000);
+            
+                gpsLayer = new GPSLayer(gpsWatcher);
+                gpsLayer.setMode(GPSLayer.Mode.OFF);
+                gpsLayer.setNavigationPointHeightFactor(0.3);
+                gpsLayer.setTrackPointSymbol(new SimpleMarkerSymbol(new Color(200, 0, 0, 200), 15, SimpleMarkerSymbol.Style.CIRCLE));
+                
+                layers.add(gpsLayer);
+            }
+        } catch (GPSException ex) {
+            Logger.getLogger(GUI.class.getName()).log(Level.SEVERE, null, ex);
+        }*/
+    }
+    
+    private class MouseClickedOverlay extends MapOverlay {
+
+    @Override
+    public void onMouseClicked(MouseEvent e) {
+      try {
+        if (!map.isReady()) {
+          return;
+        }
+        
+        else if(canSetWaypoints)
+        {
+            numberOfWaypoints++;
+        
+            java.awt.Point screenPoint = e.getPoint();
+            com.esri.core.geometry.Point mapPoint = map.toMapPoint(screenPoint.x, screenPoint.y);
+        
+            //String degreesDecimalMinutes = CoordinateConversion.pointToDegreesDecimalMinutes(mapPoint, map.getSpatialReference(), 4);
+            String decimalDegrees = CoordinateConversion.pointToDecimalDegrees(mapPoint, map.getSpatialReference(), 4);
+            //System.out.println(decimalDegrees);
+          
+            MapPointToDoubleParser parser = new MapPointToDoubleParser(decimalDegrees);
+            waypointCoordinates.put("Waypoint " + numberOfWaypoints, parser.parseMapPoint());
+        
+            /*System.out.println("Waypoint " + numberOfWaypoints + " "+ waypointCoordinates.get("Waypoint " + numberOfWaypoints).get(northCoordinate) 
+                + "N " + waypointCoordinates.get("Waypoint " + numberOfWaypoints).get(eastCoordinate) + "E");*/
+        }
+
+      } finally {
+        super.onMouseClicked(e);
+      }
+    }
+  }
 
     /**
      * This method is called from within the constructor to initialize the form.
@@ -159,6 +363,13 @@ public class GUI extends javax.swing.JFrame implements Runnable {
         southButton = new BasicArrowButton(BasicArrowButton.EAST);
         eastButton = new BasicArrowButton(BasicArrowButton.WEST);
         eastButton1 = new BasicArrowButton(BasicArrowButton.SOUTH);
+        travelModePanel = new javax.swing.JPanel();
+        MapPanel = new javax.swing.JPanel();
+        ControlPanel = new javax.swing.JPanel();
+        startGPSButton = new javax.swing.JButton();
+        resetWaypointsButton = new javax.swing.JButton();
+        waypointsButton = new javax.swing.JToggleButton();
+        sendRouteButton = new javax.swing.JButton();
         jPanel1 = new javax.swing.JPanel();
         jPanel3 = new javax.swing.JPanel();
         navDataPanel = new javax.swing.JPanel();
@@ -210,6 +421,7 @@ public class GUI extends javax.swing.JFrame implements Runnable {
         idleButton = new javax.swing.JButton();
         headingReferenceTextField = new javax.swing.JTextField();
         jLabel5 = new javax.swing.JLabel();
+        travelModeButton = new javax.swing.JButton();
 
         jPanel2.setBorder(javax.swing.BorderFactory.createEtchedBorder());
 
@@ -249,6 +461,92 @@ public class GUI extends javax.swing.JFrame implements Runnable {
                 .addGap(21, 21, 21)
                 .addComponent(southButton))
         );
+
+        javax.swing.GroupLayout MapPanelLayout = new javax.swing.GroupLayout(MapPanel);
+        MapPanel.setLayout(MapPanelLayout);
+        MapPanelLayout.setHorizontalGroup(
+            MapPanelLayout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
+            .addGap(0, 697, Short.MAX_VALUE)
+        );
+        MapPanelLayout.setVerticalGroup(
+            MapPanelLayout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
+            .addGap(0, 0, Short.MAX_VALUE)
+        );
+
+        ControlPanel.setBorder(javax.swing.BorderFactory.createTitledBorder(null, "Controls", javax.swing.border.TitledBorder.CENTER, javax.swing.border.TitledBorder.TOP, new java.awt.Font("Dialog", 1, 18))); // NOI18N
+
+        startGPSButton.setText("Start GPS");
+        startGPSButton.addActionListener(new java.awt.event.ActionListener() {
+            public void actionPerformed(java.awt.event.ActionEvent evt) {
+                startGPSButtonActionPerformed(evt);
+            }
+        });
+
+        resetWaypointsButton.setText("Reset Waypoints");
+        resetWaypointsButton.addActionListener(new java.awt.event.ActionListener() {
+            public void actionPerformed(java.awt.event.ActionEvent evt) {
+                resetWaypointsButtonActionPerformed(evt);
+            }
+        });
+
+        waypointsButton.setText("Set Waypoints");
+        waypointsButton.addActionListener(new java.awt.event.ActionListener() {
+            public void actionPerformed(java.awt.event.ActionEvent evt) {
+                waypointsButtonActionPerformed(evt);
+            }
+        });
+
+        sendRouteButton.setText("Send Route");
+        sendRouteButton.addActionListener(new java.awt.event.ActionListener() {
+            public void actionPerformed(java.awt.event.ActionEvent evt) {
+                sendRouteButtonActionPerformed(evt);
+            }
+        });
+
+        javax.swing.GroupLayout ControlPanelLayout = new javax.swing.GroupLayout(ControlPanel);
+        ControlPanel.setLayout(ControlPanelLayout);
+        ControlPanelLayout.setHorizontalGroup(
+            ControlPanelLayout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
+            .addComponent(startGPSButton, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE)
+            .addComponent(resetWaypointsButton, javax.swing.GroupLayout.DEFAULT_SIZE, 150, Short.MAX_VALUE)
+            .addComponent(waypointsButton, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE)
+            .addComponent(sendRouteButton, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE)
+        );
+        ControlPanelLayout.setVerticalGroup(
+            ControlPanelLayout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
+            .addGroup(ControlPanelLayout.createSequentialGroup()
+                .addComponent(sendRouteButton)
+                .addPreferredGap(javax.swing.LayoutStyle.ComponentPlacement.RELATED)
+                .addComponent(waypointsButton)
+                .addPreferredGap(javax.swing.LayoutStyle.ComponentPlacement.RELATED)
+                .addComponent(resetWaypointsButton)
+                .addPreferredGap(javax.swing.LayoutStyle.ComponentPlacement.RELATED)
+                .addComponent(startGPSButton)
+                .addGap(0, 376, Short.MAX_VALUE))
+        );
+
+        javax.swing.GroupLayout travelModePanelLayout = new javax.swing.GroupLayout(travelModePanel);
+        travelModePanel.setLayout(travelModePanelLayout);
+        travelModePanelLayout.setHorizontalGroup(
+            travelModePanelLayout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
+            .addGroup(travelModePanelLayout.createSequentialGroup()
+                .addContainerGap()
+                .addComponent(MapPanel, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE)
+                .addPreferredGap(javax.swing.LayoutStyle.ComponentPlacement.UNRELATED)
+                .addComponent(ControlPanel, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.PREFERRED_SIZE)
+                .addContainerGap())
+        );
+        travelModePanelLayout.setVerticalGroup(
+            travelModePanelLayout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
+            .addGroup(javax.swing.GroupLayout.Alignment.TRAILING, travelModePanelLayout.createSequentialGroup()
+                .addContainerGap()
+                .addGroup(travelModePanelLayout.createParallelGroup(javax.swing.GroupLayout.Alignment.TRAILING)
+                    .addComponent(ControlPanel, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE)
+                    .addComponent(MapPanel, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE))
+                .addContainerGap())
+        );
+
+        ControlPanel.getAccessibleContext().setAccessibleName("Controls");
 
         setDefaultCloseOperation(javax.swing.WindowConstants.EXIT_ON_CLOSE);
 
@@ -756,17 +1054,20 @@ public class GUI extends javax.swing.JFrame implements Runnable {
         jLabel5.setHorizontalAlignment(javax.swing.SwingConstants.CENTER);
         jLabel5.setText("Set heading before DP");
 
+        travelModeButton.setText("Travel Mode");
+        travelModeButton.addActionListener(new java.awt.event.ActionListener() {
+            public void actionPerformed(java.awt.event.ActionEvent evt) {
+                travelModeButtonActionPerformed(evt);
+            }
+        });
+
         javax.swing.GroupLayout jPanel5Layout = new javax.swing.GroupLayout(jPanel5);
         jPanel5.setLayout(jPanel5Layout);
         jPanel5Layout.setHorizontalGroup(
             jPanel5Layout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
-            .addGroup(jPanel5Layout.createSequentialGroup()
+            .addGroup(javax.swing.GroupLayout.Alignment.TRAILING, jPanel5Layout.createSequentialGroup()
                 .addGroup(jPanel5Layout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
                     .addGroup(jPanel5Layout.createSequentialGroup()
-                        .addGap(214, 214, 214)
-                        .addComponent(connectButton)
-                        .addGap(0, 0, Short.MAX_VALUE))
-                    .addGroup(javax.swing.GroupLayout.Alignment.TRAILING, jPanel5Layout.createSequentialGroup()
                         .addContainerGap()
                         .addGroup(jPanel5Layout.createParallelGroup(javax.swing.GroupLayout.Alignment.TRAILING)
                             .addGroup(jPanel5Layout.createSequentialGroup()
@@ -785,8 +1086,14 @@ public class GUI extends javax.swing.JFrame implements Runnable {
                                 .addComponent(idleButton, javax.swing.GroupLayout.PREFERRED_SIZE, 129, javax.swing.GroupLayout.PREFERRED_SIZE)
                                 .addGap(48, 48, 48)
                                 .addComponent(dynPosButton, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE)))
-                        .addGap(44, 44, 44)
-                        .addComponent(remoteButton, javax.swing.GroupLayout.PREFERRED_SIZE, 129, javax.swing.GroupLayout.PREFERRED_SIZE)))
+                        .addGap(44, 44, 44))
+                    .addGroup(jPanel5Layout.createSequentialGroup()
+                        .addGap(214, 214, 214)
+                        .addComponent(connectButton)
+                        .addPreferredGap(javax.swing.LayoutStyle.ComponentPlacement.RELATED, javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE)))
+                .addGroup(jPanel5Layout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING, false)
+                    .addComponent(remoteButton, javax.swing.GroupLayout.DEFAULT_SIZE, 129, Short.MAX_VALUE)
+                    .addComponent(travelModeButton, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE))
                 .addContainerGap())
         );
         jPanel5Layout.setVerticalGroup(
@@ -810,7 +1117,9 @@ public class GUI extends javax.swing.JFrame implements Runnable {
                     .addComponent(dynPosButton)
                     .addComponent(idleButton))
                 .addGap(28, 28, 28)
-                .addComponent(connectButton))
+                .addGroup(jPanel5Layout.createParallelGroup(javax.swing.GroupLayout.Alignment.BASELINE)
+                    .addComponent(connectButton)
+                    .addComponent(travelModeButton)))
         );
 
         javax.swing.GroupLayout layout = new javax.swing.GroupLayout(getContentPane());
@@ -824,7 +1133,7 @@ public class GUI extends javax.swing.JFrame implements Runnable {
                 .addGroup(layout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING, false)
                     .addComponent(setpointLabel2, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE)
                     .addComponent(jPanel5, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE)
-                    .addComponent(coordinateSystemFrame, javax.swing.GroupLayout.DEFAULT_SIZE, 504, Short.MAX_VALUE))
+                    .addComponent(coordinateSystemFrame, javax.swing.GroupLayout.DEFAULT_SIZE, 509, Short.MAX_VALUE))
                 .addContainerGap(javax.swing.GroupLayout.DEFAULT_SIZE, Short.MAX_VALUE))
         );
         layout.setVerticalGroup(
@@ -995,6 +1304,75 @@ public class GUI extends javax.swing.JFrame implements Runnable {
         r.incrementEast(-1);
         updateNavDataFields();
     }//GEN-LAST:event_refWestButtonActionPerformed
+
+    private void travelModeButtonActionPerformed(java.awt.event.ActionEvent evt) {//GEN-FIRST:event_travelModeButtonActionPerformed
+        if(!mapIsInitialised)
+        {
+            this.initialiseTravelModeFrame();
+            mapIsInitialised = true;
+        }
+        
+        guiCommand = 5;
+        r.setGUIcommand(guiCommand);
+        
+        mapFrame.setVisible(true);
+    }//GEN-LAST:event_travelModeButtonActionPerformed
+
+    private void waypointsButtonActionPerformed(java.awt.event.ActionEvent evt) {//GEN-FIRST:event_waypointsButtonActionPerformed
+        JToggleButton tBtn = (JToggleButton) evt.getSource();
+        HashMap<String, Object> attributes = new HashMap<>();
+
+        if (tBtn.isSelected()) {
+            canSetWaypoints = true;
+            attributes.put("type", "Waypoints");
+            drawingOverlay.setUp(DrawingOverlay.DrawingMode.POINT, waypoint, attributes);
+            map.addMapOverlay(mco);
+
+            d = new Date();
+            date = sdf.format(d);
+
+            route = new File("logfiles" + FSP + date + ".txt");
+            try {
+                fileWriter = new PrintWriter(new FileWriter(route));
+            } catch (IOException ex) {
+                Logger.getLogger(GUI.class.getName()).log(Level.SEVERE, null, ex);
+            }
+        } else {
+            canSetWaypoints = false;
+            attributes.clear();
+            drawingOverlay.setUp(DrawingOverlay.DrawingMode.NONE, waypoint, attributes);
+            map.removeMapOverlay(mco);
+            fileWriter.close();
+        }
+    }//GEN-LAST:event_waypointsButtonActionPerformed
+
+    private void resetWaypointsButtonActionPerformed(java.awt.event.ActionEvent evt) {//GEN-FIRST:event_resetWaypointsButtonActionPerformed
+        numberOfWaypoints = 0;
+        graphicsLayer.removeAll();
+        waypointCoordinates.clear();
+        NMEASentences.clear();
+        
+        /*try {
+            gpsWatcher.stop();
+            gpsWatcher.dispose();
+            gpsLayer.removeAll();
+        } catch (GPSException ex) {
+            Logger.getLogger(Map.class.getName()).log(Level.SEVERE, null, ex);
+            System.out.println("GPS Exception");
+        }*/
+    }//GEN-LAST:event_resetWaypointsButtonActionPerformed
+
+    private void startGPSButtonActionPerformed(java.awt.event.ActionEvent evt) {//GEN-FIRST:event_startGPSButtonActionPerformed
+        startGPS();
+    }//GEN-LAST:event_startGPSButtonActionPerformed
+
+    private void sendRouteButtonActionPerformed(java.awt.event.ActionEvent evt) {//GEN-FIRST:event_sendRouteButtonActionPerformed
+        for(int i = 0; i < NMEASentences.size(); i++)
+        {
+            System.out.println(NMEASentences.get(i));
+        }
+        System.out.println("");
+    }//GEN-LAST:event_sendRouteButtonActionPerformed
 /*
     Metode for å konvertere string til desimaltall hentet fra java api
     */
@@ -1088,6 +1466,8 @@ public class GUI extends javax.swing.JFrame implements Runnable {
     }
 
     // Variables declaration - do not modify//GEN-BEGIN:variables
+    private javax.swing.JPanel ControlPanel;
+    private javax.swing.JPanel MapPanel;
     private javax.swing.JButton connectButton;
     private javax.swing.JLabel connectedLabel;
     private javax.swing.JPanel coordinateSystemFrame;
@@ -1130,17 +1510,23 @@ public class GUI extends javax.swing.JFrame implements Runnable {
     private javax.swing.JButton refSouthButton;
     private javax.swing.JButton refWestButton;
     private javax.swing.JButton remoteButton;
+    private javax.swing.JButton resetWaypointsButton;
     private javax.swing.JLabel rotSpeedLabel;
+    private javax.swing.JButton sendRouteButton;
     private javax.swing.JLabel setpointLabel1;
     private javax.swing.JPanel setpointLabel2;
     private javax.swing.JButton southButton;
     private javax.swing.JLabel speedLabel;
+    private javax.swing.JButton startGPSButton;
     private javax.swing.JLabel statusLabel;
     private javax.swing.JLabel surgeLabel;
     private javax.swing.JLabel swayLabel;
+    private javax.swing.JButton travelModeButton;
+    private javax.swing.JPanel travelModePanel;
     private javax.swing.JPanel trendPanelSurge;
     private javax.swing.JPanel trendPanelSway;
     private javax.swing.JPanel trendPanelYaw;
+    private javax.swing.JToggleButton waypointsButton;
     private javax.swing.JLabel windDirLabel;
     private javax.swing.JLabel windSpeedLabel;
     private javax.swing.JLabel yawLabel;
