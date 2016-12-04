@@ -1,7 +1,9 @@
 package application;
 
 import com.esri.core.geometry.CoordinateConversion;
+import com.esri.core.gps.FileGPSWatcher;
 import com.esri.core.gps.GPSException;
+import com.esri.core.gps.GPSUncheckedException;
 import com.esri.core.gps.IGPSWatcher;
 import com.esri.core.map.Graphic;
 import com.esri.core.symbol.SimpleMarkerSymbol;
@@ -297,11 +299,12 @@ public class GUI extends javax.swing.JFrame implements Runnable {
     
     private void startGPS()
     {
-        /*try {
+        try {
             File path = new File("logfiles" + FSP + date + ".txt");
             if(path.exists())
             {
-                gpsWatcher = new FileGPSWatcher("logfiles" + FSP + date + ".txt", 1000, false);
+                System.out.println("logfiles" + FSP + date + ".txt");
+                gpsWatcher = new FileGPSWatcher("logfiles" + FSP + date + ".txt", 1000, true);
                 gpsWatcher.setTimeout(20000);
             
                 gpsLayer = new GPSLayer(gpsWatcher);
@@ -313,7 +316,7 @@ public class GUI extends javax.swing.JFrame implements Runnable {
             }
         } catch (GPSException ex) {
             Logger.getLogger(GUI.class.getName()).log(Level.SEVERE, null, ex);
-        }*/
+        }
     }
     
     private class MouseClickedOverlay extends MapOverlay {
@@ -1342,7 +1345,6 @@ public class GUI extends javax.swing.JFrame implements Runnable {
             attributes.clear();
             drawingOverlay.setUp(DrawingOverlay.DrawingMode.NONE, waypoint, attributes);
             map.removeMapOverlay(mco);
-            fileWriter.close();
         }
     }//GEN-LAST:event_waypointsButtonActionPerformed
 
@@ -1352,14 +1354,14 @@ public class GUI extends javax.swing.JFrame implements Runnable {
         waypointCoordinates.clear();
         NMEASentences.clear();
         
-        /*try {
+        try {
             gpsWatcher.stop();
             gpsWatcher.dispose();
             gpsLayer.removeAll();
         } catch (GPSException ex) {
-            Logger.getLogger(Map.class.getName()).log(Level.SEVERE, null, ex);
+            Logger.getLogger(GUI.class.getName()).log(Level.SEVERE, null, ex);
             System.out.println("GPS Exception");
-        }*/
+        }
     }//GEN-LAST:event_resetWaypointsButtonActionPerformed
 
     private void startGPSButtonActionPerformed(java.awt.event.ActionEvent evt) {//GEN-FIRST:event_startGPSButtonActionPerformed
@@ -1369,9 +1371,9 @@ public class GUI extends javax.swing.JFrame implements Runnable {
     private void sendRouteButtonActionPerformed(java.awt.event.ActionEvent evt) {//GEN-FIRST:event_sendRouteButtonActionPerformed
         for(int i = 0; i < NMEASentences.size(); i++)
         {
-            System.out.println(NMEASentences.get(i));
+            fileWriter.println(NMEASentences.get(i));
         }
-        System.out.println("");
+        fileWriter.close();
     }//GEN-LAST:event_sendRouteButtonActionPerformed
 /*
     Metode for å konvertere string til desimaltall hentet fra java api
