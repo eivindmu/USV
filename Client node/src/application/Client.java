@@ -8,6 +8,7 @@ import java.io.InputStreamReader;
 import java.io.PrintStream;
 import java.io.PrintWriter;
 import java.net.Socket;
+import java.util.ArrayList;
 import java.util.Date;
 
 /**
@@ -37,6 +38,9 @@ public class Client extends Thread {
     private DataStorage storage;
     private PrintWriter nedWriter;
     private boolean writing;
+    
+    private ArrayList<String> NMEASentences;
+    private boolean shouldSendRoute = false;
 
     public Client(JoystickReader reader, DataStorage storage) {
         this.reader = reader;
@@ -46,18 +50,22 @@ public class Client extends Thread {
         guiCommand = 0;
         latLonFromUSV = new double[2];
         dataFromUSV = new float[23];
+        
+        NMEASentences = new ArrayList<>();
     }
 
     @Override
     public void run() {
         while (true) {
-            /*System.out.println("GUI Command: " + 
-                    guiCommand + " in FIRST While-loop in Reader");*/
+            System.out.println("GUI Command: " + 
+                    guiCommand + " in FIRST While-loop in Reader");
             // Bruker trykker connect
             if (guiCommand == 3) { 
                 try {
+                    System.out.println("Should connect");
                     // Opprett ny socket 192.168.0.101
-                    Socket clientSocket = new Socket("10.0.0.216", 2345);
+                    Socket clientSocket = new Socket("localhost", 2345);
+                    System.out.println(clientSocket.isConnected());
 
                     BufferedReader inFromServer;
                     PrintStream pstream = new PrintStream(clientSocket.
@@ -99,6 +107,16 @@ public class Client extends Thread {
                                 pstream.close();
                                 clientSocket.close();
                                 System.out.println("Socket CLOSED");
+                            }
+                            
+                            // If travel mode
+                            if(guiCommand == 5)
+                            {
+                                if(shouldSendRoute)
+                                {
+                                    pstream.println(NMEASentences);
+                                    this.shouldSendRoute = false;
+                                }
                             }
 
                             lastTime = System.currentTimeMillis();
@@ -229,6 +247,12 @@ public class Client extends Thread {
     // Flytt DP-settpunkt øst
     public synchronized void incrementEast(int increment) {
         incrementReferenceEast += increment;
+    }
+    
+    public void setNMEASentences(ArrayList<String> sentences)
+    {
+        this.NMEASentences = sentences;
+        this.shouldSendRoute = true;
     }
 
     int getGuiCommand() {

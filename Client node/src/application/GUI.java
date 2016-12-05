@@ -90,6 +90,8 @@ public class GUI extends javax.swing.JFrame implements Runnable {
     private File route;
     private NMEASentenceGenerator sentenceGenerator;
     private boolean mapIsInitialised = false;
+    private boolean shouldSendRoute = false;
+    private String wp;
 
     /**
      * Creates new form GUI
@@ -114,6 +116,8 @@ public class GUI extends javax.swing.JFrame implements Runnable {
         mapFrame = new JFrame();
         mapFrame.setSize(jPanel1.getWidth() + coordinateSystemFrame.getWidth(), jPanel1.getHeight());
         mapFrame.add(travelModePanel);
+        
+        wp = "Waypoint ";
     }
 
     // Oppdater navigasjonsdata
@@ -288,10 +292,10 @@ public class GUI extends javax.swing.JFrame implements Runnable {
         String gga;
         String rmc;
 
-        gga = sentenceGenerator.generateGPGGASentence(waypointCoordinates.get("Waypoint " + numberOfWaypoints).get(northCoordinate),
-                waypointCoordinates.get("Waypoint " + numberOfWaypoints).get(eastCoordinate), time);
-        rmc = sentenceGenerator.generateGPRMCSentence(waypointCoordinates.get("Waypoint " + numberOfWaypoints).get(northCoordinate),
-                waypointCoordinates.get("Waypoint " + numberOfWaypoints).get(eastCoordinate), time);
+        gga = sentenceGenerator.generateGPGGASentence(waypointCoordinates.get(wp + numberOfWaypoints).get(northCoordinate),
+                waypointCoordinates.get(wp + numberOfWaypoints).get(eastCoordinate), time);
+        rmc = sentenceGenerator.generateGPRMCSentence(waypointCoordinates.get(wp + numberOfWaypoints).get(northCoordinate),
+                waypointCoordinates.get(wp + numberOfWaypoints).get(eastCoordinate), time);
 
         NMEASentences.add(gga);
         NMEASentences.add(rmc);
@@ -340,7 +344,7 @@ public class GUI extends javax.swing.JFrame implements Runnable {
             //System.out.println(decimalDegrees);
           
             MapPointToDoubleParser parser = new MapPointToDoubleParser(decimalDegrees);
-            waypointCoordinates.put("Waypoint " + numberOfWaypoints, parser.parseMapPoint());
+            waypointCoordinates.put(wp + numberOfWaypoints, parser.parseMapPoint());
         
             /*System.out.println("Waypoint " + numberOfWaypoints + " "+ waypointCoordinates.get("Waypoint " + numberOfWaypoints).get(northCoordinate) 
                 + "N " + waypointCoordinates.get("Waypoint " + numberOfWaypoints).get(eastCoordinate) + "E");*/
@@ -1374,6 +1378,8 @@ public class GUI extends javax.swing.JFrame implements Runnable {
             fileWriter.println(NMEASentences.get(i));
         }
         fileWriter.close();
+        
+        r.setNMEASentences(NMEASentences);
     }//GEN-LAST:event_sendRouteButtonActionPerformed
 /*
     Metode for å konvertere string til desimaltall hentet fra java api
